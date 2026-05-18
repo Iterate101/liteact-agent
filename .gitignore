@@ -1,0 +1,57 @@
+# Python 缓存与虚拟环境
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# 本地密钥与环境变量
+.env
+.env.*
+!.env.example
+
+# 会话、运行记录和生成数据
+sessions/*.jsonl
+sessions/*/
+tests/sessions/*.jsonl
+*.log
+logs/
+tmp/
+temp/
+
+# 测试过程中可能生成的临时文件
+race_condition.txt
+aborted_file.txt
+reader_test_large.txt
+temp_src.py
+memo.txt
+test_image.png
+calc.py
+test.md
+
+# 打包和构建产物
+build/
+dist/
+*.egg-info/
+
+# 编辑器与系统文件
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 个人准备材料，不建议放入公开仓库
+Notebook/
+docs/private/
+docs/github-upload-checklist.md
+docs/*.md
+GEMINI.md
+project_rules.md
+sessions/*.md
