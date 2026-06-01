@@ -5,12 +5,11 @@ from src.tools.base import AgentTool, AgentToolResult, AgentToolUpdateCallback, 
 class AttachTool(AgentTool):
     """
     【附件分发器】
-    允许 Agent 将沙箱内的文件（如生成的 CSV、图表、分析报告）上传并发送到聊天平台。
-    当前 SlackBot 已实现 upload_file；其他平台需要客户端提供同名方法后才能稳定使用。
+    允许 Agent 将沙箱内的文件（如生成的 CSV、图表、分析报告）上传并投递到 Slack 对话频道中。
     """
     
     name: str = "attach_file"
-    description: str = "将指定路径的文件作为附件上传到当前聊天平台。当前 Slack 适配器已实现上传；其他平台需要客户端提供 upload_file 方法。"
+    description: str = "将指定路径的文件作为附件上传并分享到 Slack。常用于发送分析报告、图片、生成的代码等。"
     parameters: dict = {
         "type": "object",
         "properties": {
@@ -42,9 +41,9 @@ class AttachTool(AgentTool):
             )
 
         try:
-            # 1. 广播通知：开始上传附件
+            # 1. 广播通知：开始投递附件
             if on_partial_result:
-                await on_partial_result(f"_→ 正在上传附件: `{file_path}`..._")
+                await on_partial_result(f"_→ 正在投递附件: `{file_path}`..._")
 
             # 2. 调用外部注入的上传机制（内部包含路径转译逻辑）
             await self.upload_fn(file_path, label)
@@ -56,6 +55,6 @@ class AttachTool(AgentTool):
 
         except Exception as e:
             return AgentToolResult(
-                content=[TextContent(text=f"❌ 附件上传失败: {str(e)}")],
+                content=[TextContent(text=f"❌ 附件投递失败: {str(e)}")],
                 is_error=True
             )

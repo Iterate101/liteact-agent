@@ -33,16 +33,36 @@ class SearchTextTool(AgentTool):
     def __init__(self, base_path: Optional[str] = None):
         self.base_path = base_path
 
+    def _resolve_path(self, path: str) -> str:
+        if not self.base_path:
+            return path
+
+        base = Path(self.base_path).resolve()
+        normalized = (path or "/workspace/").replace("\\", "/")
+        if normalized.startswith("/workspace/"):
+            rel_path = normalized[len("/workspace/"):].lstrip("/")
+            target_path = (base / rel_path).resolve()
+        else:
+            raw_path = Path(path)
+            target_path = raw_path.resolve() if raw_path.is_absolute() else (base / raw_path).resolve()
+
+        try:
+            target_path.relative_to(base)
+        except ValueError:
+            raise ValueError(f"路径越界：{path} 不在工作区 {base} 内。")
+
+        return str(target_path)
+
     async def execute(self, tool_call_id: str, params: dict, **kwargs) -> AgentToolResult:
         pattern_str = params.get("pattern", "")
         path_str = params.get("path", "/workspace/")
         ignore_case = params.get("ignore_case", True)
 
         # 1. 沙箱转译
-        real_path = path_str
-        if self.base_path and path_str.startswith("/workspace/"):
-            rel_path = path_str[len("/workspace/"):].lstrip("/").lstrip("\\")
-            real_path = os.path.join(self.base_path, rel_path)
+        try:
+            real_path = self._resolve_path(path_str)
+        except Exception as e:
+            return AgentToolResult(content=[TextContent(text=f"错误：{str(e)}")], is_error=True)
 
         if not os.path.exists(real_path):
             return AgentToolResult(content=[TextContent(text=f"错误：路径不存在 {path_str}")], is_error=True)
@@ -114,15 +134,35 @@ class SearchFilesTool(AgentTool):
     def __init__(self, base_path: Optional[str] = None):
         self.base_path = base_path
 
+    def _resolve_path(self, path: str) -> str:
+        if not self.base_path:
+            return path
+
+        base = Path(self.base_path).resolve()
+        normalized = (path or "/workspace/").replace("\\", "/")
+        if normalized.startswith("/workspace/"):
+            rel_path = normalized[len("/workspace/"):].lstrip("/")
+            target_path = (base / rel_path).resolve()
+        else:
+            raw_path = Path(path)
+            target_path = raw_path.resolve() if raw_path.is_absolute() else (base / raw_path).resolve()
+
+        try:
+            target_path.relative_to(base)
+        except ValueError:
+            raise ValueError(f"路径越界：{path} 不在工作区 {base} 内。")
+
+        return str(target_path)
+
     async def execute(self, tool_call_id: str, params: dict, **kwargs) -> AgentToolResult:
         pattern = params.get("pattern", "")
         path_str = params.get("path", "/workspace/")
 
         # 1. 沙箱转译
-        real_path = path_str
-        if self.base_path and path_str.startswith("/workspace/"):
-            rel_path = path_str[len("/workspace/"):].lstrip("/").lstrip("\\")
-            real_path = os.path.join(self.base_path, rel_path)
+        try:
+            real_path = self._resolve_path(path_str)
+        except Exception as e:
+            return AgentToolResult(content=[TextContent(text=f"错误：{str(e)}")], is_error=True)
 
         matches = []
         limit = 50

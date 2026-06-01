@@ -229,7 +229,7 @@ class FeishuClient:
                 .receive_id(chat_id).msg_type("interactive").content(json.dumps(card)).build()) \
             .build()
 
-        print(f"DEBUG: [API 发送中] Target: {chat_id} | Type: {id_type}")
+        print(f"DEBUG: [API 投递中] Target: {chat_id} | Type: {id_type}")
         
         # 异步调用阻塞式 SDK
         response = await self.loop.run_in_executor(None, lambda: self.client.im.v1.message.create(request))

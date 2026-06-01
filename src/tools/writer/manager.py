@@ -1,11 +1,13 @@
 import os
 import asyncio
 import time
+from pathlib import Path
 from typing import Literal, Optional
 from .local import LocalDirectDriver
 from .remote import RemoteShellDriver
 from src.utils.lock_manager import global_path_lock
 from src.tools.base import AgentTool, AgentToolResult, AgentToolUpdateCallback
+from src.tools.checkpoint import PatchCheckpointStore
 from src.models.messages import TextContent
 
 class FileWriteManager(AgentTool):
@@ -27,10 +29,32 @@ class FileWriteManager(AgentTool):
 
     def __init__(self, mode: Literal["local", "remote"] = "local", base_path: Optional[str] = None):
         self.base_path = base_path
+        self.mode = mode
+        self.checkpoints = PatchCheckpointStore(base_path)
         if mode == "local":
             self.driver = LocalDirectDriver()
         else:
             self.driver = RemoteShellDriver()
+
+    def _resolve_target_path(self, path: str) -> str:
+        if not self.base_path:
+            return path
+
+        base = Path(self.base_path).resolve()
+        normalized = (path or "").replace("\\", "/")
+        if normalized.startswith("/workspace/"):
+            rel_path = normalized[len("/workspace/"):].lstrip("/")
+            target_path = (base / rel_path).resolve()
+        else:
+            raw_path = Path(path)
+            target_path = raw_path.resolve() if raw_path.is_absolute() else (base / raw_path).resolve()
+
+        try:
+            target_path.relative_to(base)
+        except ValueError:
+            raise ValueError(f"路径越界：{path} 不在工作区 {base} 内。")
+
+        return str(target_path)
             
     async def execute(
         self, 
@@ -42,11 +66,16 @@ class FileWriteManager(AgentTool):
         """统一执行入口"""
         path = params.get("path", "")
         
-        # 【沙箱加固逻辑】：将虚拟的 /workspace/ 转译为真实的宿主机路径
-        if self.base_path and path.startswith("/workspace/"):
-            rel_path = path[len("/workspace/"):].lstrip("/")
-            params["path"] = os.path.join(self.base_path, rel_path)
-            print(f"DEBUG: [沙箱转译] {path} -> {params['path']}")
+        if self.base_path:
+            try:
+                params = dict(params)
+                params["path"] = self._resolve_target_path(path)
+            except Exception as e:
+                return AgentToolResult(
+                    content=[TextContent(text=f"错误：{str(e)}")],
+                    details={"status": "error"},
+                    is_error=True,
+                )
 
         res = await self.write_file(abort_signal=abort_signal, **params)
         is_error = not res.get("success", False)
@@ -55,6 +84,7 @@ class FileWriteManager(AgentTool):
         
         return AgentToolResult(
             content=[TextContent(text=error_msg if is_error else str(result_text))],
+            details=res.get("details", {"status": "error" if is_error else "success"}),
             is_error=is_error
         )
             
@@ -66,17 +96,43 @@ class FileWriteManager(AgentTool):
         # 只有当前路径在没有人修改的情况下，我们才会继续推进
         async with global_path_lock.lock_path(path):
             start_time = time.time()
+            checkpoint = None
             
             # 2. 调度执行！
             try:
+                if self.mode == "local":
+                    checkpoint = self.checkpoints.create_checkpoint(
+                        target_path=Path(path),
+                        tool_name=self.name,
+                    )
                 result = await self.driver.write(path, content, abort_signal)
+                if checkpoint is not None:
+                    checkpoint = self.checkpoints.finalize_checkpoint(
+                        checkpoint_id=checkpoint["checkpoint_id"],
+                        target_path=Path(path),
+                    )
                 
                 # 3. 统计并反馈 (Detailed Feedback)
                 duration = time.time() - start_time
                 bytes_count = len(content.encode('utf-8'))
                 
                 print(f"[LOG] File Written: {path} | Size: {bytes_count}B | Duration: {duration:.4f}s")
-                return {"success": True, "result": result}
+                details = {
+                    "status": "success",
+                    "bytes": bytes_count,
+                    "duration_sec": round(duration, 4),
+                }
+                if checkpoint is not None:
+                    details.update(
+                        {
+                            "checkpoint_id": checkpoint["checkpoint_id"],
+                            "before_sha256": checkpoint["before_sha256"],
+                            "after_sha256": checkpoint["after_sha256"],
+                            "rollback_tool": "rollback_file",
+                            "rollback_args": {"checkpoint_id": checkpoint["checkpoint_id"]},
+                        }
+                    )
+                return {"success": True, "result": result, "details": details}
                 
             except asyncio.CancelledError:
                 print(f"[WAR] Write aborted for path: {path}")

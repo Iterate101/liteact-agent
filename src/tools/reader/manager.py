@@ -1,6 +1,7 @@
 import os
 import asyncio
 import base64
+from pathlib import Path
 from typing import Literal, Optional, Dict, Union
 from .local import LocalDirectDriver
 from .remote import RemoteShellDriver
@@ -35,6 +36,26 @@ class FileReadManager(AgentTool):
         else:
             self.driver = RemoteShellDriver()
 
+    def _resolve_target_path(self, path: str) -> str:
+        if not self.base_path:
+            return path
+
+        base = Path(self.base_path).resolve()
+        normalized = (path or "").replace("\\", "/")
+        if normalized.startswith("/workspace/"):
+            rel_path = normalized[len("/workspace/"):].lstrip("/")
+            target_path = (base / rel_path).resolve()
+        else:
+            raw_path = Path(path)
+            target_path = raw_path.resolve() if raw_path.is_absolute() else (base / raw_path).resolve()
+
+        try:
+            target_path.relative_to(base)
+        except ValueError:
+            raise ValueError(f"路径越界：{path} 不在工作区 {base} 内。")
+
+        return str(target_path)
+
     async def execute(
         self, 
         tool_call_id: str, 
@@ -45,11 +66,16 @@ class FileReadManager(AgentTool):
         """作为 AgentTool 协议的唯一入口"""
         path = params.get("path", "")
         
-        # 【沙箱加固逻辑】：将虚拟的 /workspace/ 转译为真实的宿主机路径
-        if self.base_path and path.startswith("/workspace/"):
-            rel_path = path[len("/workspace/"):].lstrip("/")
-            params["path"] = os.path.join(self.base_path, rel_path)
-            print(f"DEBUG: [沙箱转译] {path} -> {params['path']}")
+        if self.base_path:
+            try:
+                params = dict(params)
+                params["path"] = self._resolve_target_path(path)
+            except Exception as e:
+                return AgentToolResult(
+                    content=[TextContent(text=f"错误：{str(e)}")],
+                    details={"status": "error"},
+                    is_error=True,
+                )
 
         res = await self.read_file(abort_signal=abort_signal, **params)
         

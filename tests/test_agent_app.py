@@ -2,7 +2,6 @@ import asyncio
 import sys
 import os
 import json
-import pytest
 
 # 加入根目录到搜索路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -14,11 +13,6 @@ from src.agent.events import TurnEndEvent, ToolCallStartEvent, ToolCallEndEvent
 if sys.stdout.encoding.lower() != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
-@pytest.mark.live_e2e
-@pytest.mark.skipif(
-    os.environ.get("LITEACT_RUN_LIVE_E2E") != "1",
-    reason="需要显式设置 LITEACT_RUN_LIVE_E2E=1 才运行真实模型端到端测试。",
-)
 async def test_agent_session_e2e():
     print("\n--- [端到端集成测试] AgentSession Facade ---")
     

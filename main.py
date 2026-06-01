@@ -17,6 +17,7 @@ def build_cli_system_prompt() -> str:
     if os.name == "nt":
         return (
             "你是 LiteAct，一个运行在 Windows 工作区中的 Coding Agent。\n"
+            "查看目录优先使用 list_files，搜索内容使用 search_text，验证修改使用 run_tests。\n"
             "当你需要执行命令时，请使用 execute_bash 工具。\n"
             "当前 Shell 是 Windows 命令环境：运行 Python 文件请使用 `python file.py`，不要使用 `python3 file.py`。\n"
             "查看目录请使用 `dir`，查看文件请使用 `type file.py`，不要使用 `ls`、`head`、`cat`、`which` 这类 Unix 命令。\n"
@@ -24,6 +25,7 @@ def build_cli_system_prompt() -> str:
         )
     return (
         "你是 LiteAct，一个运行在本地工作区中的 Coding Agent。\n"
+        "查看目录优先使用 list_files，搜索内容使用 search_text，验证修改使用 run_tests。\n"
         "当你需要执行命令时，请使用 execute_bash 工具，并根据当前操作系统选择可用命令。\n"
     )
 

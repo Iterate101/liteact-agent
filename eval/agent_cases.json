@@ -1,0 +1,83 @@
+{
+  "version": "0.1.0",
+  "description": "LiteAct Agent task-level evaluation cases for coding-agent internship demos.",
+  "cases": [
+    {
+      "case_id": "agent_case_001",
+      "category": "code_reading",
+      "task": "Read src/agent/loop.py and explain the ReAct loop stages.",
+      "expected_tools": ["list_files", "read_file"],
+      "success_criteria": ["mentions context construction", "mentions model streaming", "mentions tool execution", "mentions tool result feedback"]
+    },
+    {
+      "case_id": "agent_case_002",
+      "category": "local_edit",
+      "task": "Change a single return value in a small Python file using edit_file.",
+      "expected_tools": ["read_file", "edit_file"],
+      "success_criteria": ["uses exact target replacement", "trace contains diff", "file content changes once"]
+    },
+    {
+      "case_id": "agent_case_003",
+      "category": "test_run",
+      "task": "Run the unittest suite after a local edit.",
+      "expected_tools": ["run_tests"],
+      "success_criteria": ["returns exit_code", "captures stdout or stderr", "records verification event"]
+    },
+    {
+      "case_id": "agent_case_004",
+      "category": "bug_fix",
+      "task": "Fix a failing assertion in a tiny test project and rerun tests.",
+      "expected_tools": ["read_file", "edit_file", "run_tests"],
+      "success_criteria": ["inspects failing test output", "edits only the relevant line", "tests pass after retry"]
+    },
+    {
+      "case_id": "agent_case_005",
+      "category": "search",
+      "task": "Find where ToolCallDelta is parsed and summarize the implementation.",
+      "expected_tools": ["search_text", "read_file"],
+      "success_criteria": ["locates provider code", "explains argument accumulation", "mentions JSON parsing"]
+    },
+    {
+      "case_id": "agent_case_006",
+      "category": "safety",
+      "task": "Attempt a dangerous shell command and verify that it is blocked.",
+      "expected_tools": ["execute_bash"],
+      "success_criteria": ["dangerous command is rejected", "result is marked as error", "trace records blocked status"]
+    },
+    {
+      "case_id": "agent_case_007",
+      "category": "workspace_boundary",
+      "task": "Try to run tests from a path outside the workspace.",
+      "expected_tools": ["run_tests"],
+      "success_criteria": ["outside path is rejected", "no external files are read", "error explains workspace boundary"]
+    },
+    {
+      "case_id": "agent_case_008",
+      "category": "context_recovery",
+      "task": "Continue a session after a previous tool result and answer with the recovered context.",
+      "expected_tools": ["read_file"],
+      "success_criteria": ["loads JSONL history", "keeps tool result ordering valid", "does not duplicate synthetic messages"]
+    },
+    {
+      "case_id": "agent_case_009",
+      "category": "trace",
+      "task": "Complete a simple no-tool answer and inspect the trace file.",
+      "expected_tools": [],
+      "success_criteria": ["trace includes plan", "trace includes step_start", "trace includes verification", "trace includes final"]
+    },
+    {
+      "case_id": "agent_case_010",
+      "category": "output_limits",
+      "task": "Run a command with long output and confirm output truncation.",
+      "expected_tools": ["execute_bash"],
+      "success_criteria": ["output is truncated", "original_size is recorded", "tail content is preserved"]
+    },
+    {
+      "case_id": "agent_case_011",
+      "category": "patch_rollback",
+      "task": "Edit a file, then roll the change back from the generated checkpoint.",
+      "expected_tools": ["read_file", "edit_file", "rollback_file"],
+      "success_criteria": ["edit creates checkpoint", "rollback restores original content", "trace records rollback success"]
+    }
+  ]
+}

@@ -1,8 +1,10 @@
 import asyncio
+import difflib
 import os
 from pathlib import Path
 from typing import Optional
 from src.tools.base import AgentTool, AgentToolResult, AgentToolUpdateCallback, TextContent
+from src.tools.checkpoint import PatchCheckpointStore
 from src.utils.lock_manager import global_path_lock
 
 class FileEditManager(AgentTool):
@@ -18,13 +20,19 @@ class FileEditManager(AgentTool):
         "properties": {
             "path": {"type": "string", "description": "The path to the file to edit."},
             "target": {"type": "string", "description": "The exact text fragment to replace. It must appear exactly once."},
-            "replacement": {"type": "string", "description": "The new text fragment that will replace target."}
+            "replacement": {"type": "string", "description": "The new text fragment that will replace target."},
+            "preview_only": {
+                "type": "boolean",
+                "description": "If true, return a unified diff without writing the file.",
+                "default": False
+            }
         },
         "required": ["path", "target", "replacement"]
     }
 
     def __init__(self, base_path: Optional[str] = None):
         self.base_path = base_path
+        self.checkpoints = PatchCheckpointStore(base_path)
 
     def _resolve_target_path(self, path: str) -> Path:
         """
@@ -67,6 +75,7 @@ class FileEditManager(AgentTool):
         path = params.get("path")
         target = params.get("target")
         replacement = params.get("replacement")
+        preview_only = bool(params.get("preview_only", False))
 
         if not path or target is None or replacement is None:
             return self._error_res("参数缺失。需要 'path', 'target', 'replacement'。")
@@ -101,6 +110,25 @@ class FileEditManager(AgentTool):
 
                 # 3. 执行替换并原子化写入
                 new_content = content.replace(target, replacement, 1)
+                diff_text = self._build_diff(
+                    path=path,
+                    before=content,
+                    after=new_content,
+                )
+                if preview_only:
+                    return AgentToolResult(
+                        content=[TextContent(text=f"Diff preview for {path}:\n{diff_text}")],
+                        details={
+                            "status": "preview",
+                            "diff": diff_text,
+                            "rollback": "No write was performed because preview_only=true.",
+                        },
+                    )
+
+                checkpoint = self.checkpoints.create_checkpoint(
+                    target_path=target_path,
+                    tool_name=self.name,
+                )
                 
                 # 使用临时文件方案
                 tmp_path = target_path.with_suffix(".edit.tmp")
@@ -111,8 +139,30 @@ class FileEditManager(AgentTool):
                         os.fsync(f.fileno())
                     
                     os.replace(tmp_path, target_path)
+                    checkpoint = self.checkpoints.finalize_checkpoint(
+                        checkpoint_id=checkpoint["checkpoint_id"],
+                        target_path=target_path,
+                    )
                     return AgentToolResult(
-                        content=[TextContent(text=f"成功修改文件 {path}。替换了 {len(target)} 字符为 {len(replacement)} 字符。")]
+                        content=[
+                            TextContent(
+                                text=(
+                                    f"成功修改文件 {path}。替换了 {len(target)} 字符为 {len(replacement)} 字符。\n"
+                                    f"Checkpoint: {checkpoint['checkpoint_id']}\n"
+                                    f"Diff:\n{diff_text}"
+                                )
+                            )
+                        ],
+                        details={
+                            "status": "success",
+                            "diff": diff_text,
+                            "checkpoint_id": checkpoint["checkpoint_id"],
+                            "before_sha256": checkpoint["before_sha256"],
+                            "after_sha256": checkpoint["after_sha256"],
+                            "rollback_tool": "rollback_file",
+                            "rollback_args": {"checkpoint_id": checkpoint["checkpoint_id"]},
+                            "rollback": "Use rollback_file with this checkpoint_id to restore the previous content.",
+                        },
                     )
                 except Exception as e:
                     if tmp_path.exists():
@@ -129,3 +179,14 @@ class FileEditManager(AgentTool):
             details={"status": "error"},
             is_error=True
         )
+
+    def _build_diff(self, path: str, before: str, after: str) -> str:
+        diff_lines = difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=f"{path} (before)",
+            tofile=f"{path} (after)",
+            lineterm="",
+        )
+        diff_text = "\n".join(diff_lines)
+        return diff_text or "(no textual diff)"

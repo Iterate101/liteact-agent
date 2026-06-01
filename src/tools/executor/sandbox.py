@@ -24,7 +24,7 @@ class Sandbox(ABC):
     
     @abstractmethod
     async def exec(self, command: str, timeout: float = 30.0, cwd: Optional[str] = None) -> ExecResult:
-        """执行一段当前系统 Shell 指令并返回结果"""
+        """执行一段 Bash 指令并返回结果"""
         pass
 
     @abstractmethod
@@ -33,7 +33,7 @@ class Sandbox(ABC):
         pass
 
 class LocalSandbox(Sandbox):
-    """【本地执行器】在宿主机执行命令；它不提供容器级隔离"""
+    """【本地沙箱】在宿主机直接开火"""
     
     async def exec(self, command: str, timeout: float = 30.0, cwd: Optional[str] = None) -> ExecResult:
         # 在 Windows 上使用 cmd，在 Unix 上使用 sh

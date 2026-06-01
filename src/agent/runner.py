@@ -11,8 +11,9 @@ from src.agent.events import (
 )
 from src.models.ai import UserMessage, AgentContext
 from src.tools.slack.attach import AttachTool
-from src.tools.explorer.manager import SafeLsTool
+from src.tools.explorer.manager import ListFilesTool, SafeLsTool
 from src.tools.search.manager import SearchTextTool, SearchFilesTool
+from src.tools.test_runner import RunTestsTool
 
 class AgentRunner:
     """
@@ -75,15 +76,27 @@ class AgentRunner:
         # 2. 动态挂载/更新工具
         self.loop.tools["attach_file"] = AttachTool(upload_fn=upload_fn)
         self.loop.tools["safe_ls"] = SafeLsTool()
+        self.loop.tools["list_files"] = ListFilesTool()
         self.loop.tools["search_text"] = SearchTextTool()
         self.loop.tools["search_files"] = SearchFilesTool()
+        self.loop.tools["run_tests"] = RunTestsTool()
         
         # 3. 目录与记忆准备
         channel_dir = self.sessions_dir / channel_id
         channel_dir.mkdir(parents=True, exist_ok=True)
         
         # 【沙箱注入核心逻辑】
-        for t_name in ["read_file", "write_file", "edit_file", "execute_bash", "safe_ls", "search_text", "search_files"]:
+        for t_name in [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "execute_bash",
+            "safe_ls",
+            "list_files",
+            "search_text",
+            "search_files",
+            "run_tests",
+        ]:
             if t_name in self.loop.tools:
                 tool_instance = self.loop.tools[t_name]
                 target_attr = "cwd" if t_name == "execute_bash" else "base_path"
@@ -177,17 +190,6 @@ class AgentRunner:
         
         # 动态调整格式化要求：如果是飞书，支持标准 Markdown
         formatting_rule = "Use standard MarkDown." if self.platform == "feishu" else "Use *bold* for bold, _italic_ for italic (Slack mrkdwn)."
-        attach_rule = (
-            "Use `attach_file` to send generated artifacts to the user."
-            if self.platform == "slack"
-            else "Do not call `attach_file` on Feishu yet; this client still needs a stable upload_file implementation."
-        )
-        command_rule = (
-            "When using `execute_bash`, commands run in Windows cmd from the channel workspace. "
-            "Use relative paths plus Windows commands such as `python`, `dir`, and `type`; avoid `/workspace/` absolute paths and Unix-only commands such as `ls`, `cat`, `head`, and `which`."
-            if os.name == "nt"
-            else "When using `execute_bash`, commands run from the channel workspace. Use relative paths unless a tool explicitly asks for `/workspace/` paths."
-        )
         
         return f"""You are LiteAct, a cross-platform AI Assistant.
 Current Time: {now}
@@ -200,13 +202,12 @@ Target Platform: {self.platform.upper()}
 {memory}
 
 ## Environment
-File tools use a virtual workspace root: /workspace/
-All files for this channel must stay in that workspace.
-{command_rule}
-Use `safe_ls` to explore directory structures (it's cleaner and safer than raw shell listing commands).
+You run in a sandbox. Workspace root: /workspace/
+All your files for this channel must stay in /workspace/. 
+Use `safe_ls` to explore directory structures (it's cleaner and safer than bare bash `ls`).
 Use `edit_file` for small, precise text replacements when the target snippet appears exactly once.
 Use `execute_bash` to download resources (e.g., via `git clone` or `curl`) or run complex analysis scripts.
-{attach_rule}
+Use `attach_file` to send generated artifacts to the user.
 
 Respond with [SILENT] only if no output text is needed.
 """

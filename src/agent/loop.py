@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from typing import AsyncGenerator, List, Optional, Dict, Literal, Any
 from src.models.ai import (
     AgentContext, AgentMessage, UserMessage, AssistantMessage, 
@@ -7,11 +8,11 @@ from src.models.ai import (
     TextDelta, ThinkingDelta, ToolCallDelta, UsageEvent
 )
 from src.agent.events import (
-    AgentEvent, TurnStartEvent, MessageDeltaEvent,
-    ToolCallStartEvent, ToolCallEndEvent, TurnEndEvent
+    AgentEvent, PlanEvent, TurnStartEvent, StepStartEvent, MessageDeltaEvent,
+    ToolCallStartEvent, ToolCallEndEvent, VerificationEvent, TurnEndEvent,
+    FinalEvent, ErrorEvent
 )
 from src.tools.base import AgentTool, AgentToolResult
-from src.tools.registry import build_default_tools
 from src.ai.stream import stream_chat
 from src.ai.transformer import transform_messages
 
@@ -24,12 +25,33 @@ class ReActLoop:
     def __init__(
         self, 
         model_id: str = "gpt-4o", 
-        api_type: str = "openai-responses"
+        api_type: str = "openai-responses",
+        workspace_root: Optional[str] = None,
     ):
         self.model_id = model_id
         self.api_type = api_type
-        # 建立默认工具注册表。这样 ReActLoop、测试和文档都能围绕同一个默认工具来源对齐。
-        self.tools: Dict[str, AgentTool] = build_default_tools()
+        self.workspace_root = workspace_root or os.getcwd()
+        # 建立工具注册表
+        from src.tools.reader.manager import FileReadManager
+        from src.tools.writer.manager import FileWriteManager
+        from src.tools.editor.manager import FileEditManager
+        from src.tools.executor.manager import ShellExecutor
+        from src.tools.explorer.manager import ListFilesTool
+        from src.tools.search.manager import SearchFilesTool, SearchTextTool
+        from src.tools.test_runner import RunTestsTool
+        from src.tools.rollback.manager import RollbackFileManager
+        
+        self.tools: Dict[str, AgentTool] = {
+            "read_file": FileReadManager(base_path=self.workspace_root),
+            "write_file": FileWriteManager(base_path=self.workspace_root),
+            "edit_file": FileEditManager(base_path=self.workspace_root),
+            "execute_bash": ShellExecutor(cwd=self.workspace_root),
+            "list_files": ListFilesTool(base_path=self.workspace_root),
+            "search_text": SearchTextTool(base_path=self.workspace_root),
+            "search_files": SearchFilesTool(base_path=self.workspace_root),
+            "run_tests": RunTestsTool(base_path=self.workspace_root),
+            "rollback_file": RollbackFileManager(base_path=self.workspace_root),
+        }
 
     def _get_openai_tools_schema(self) -> List[Dict[str, Any]]:
         """将本地 AgentTool 协议转换为 OpenAI 定义格式"""
@@ -66,6 +88,29 @@ class ReActLoop:
             )
         return raw_message
 
+    def _extract_task_summary(self, context: AgentContext) -> str:
+        if not context.messages:
+            return ""
+        last_message = context.messages[-1]
+        content = getattr(last_message, "content", "")
+        if isinstance(content, str):
+            return content[:200]
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                text = getattr(item, "text", None)
+                if text:
+                    parts.append(text)
+            return "\n".join(parts)[:200]
+        return str(content)[:200]
+
+    def _collect_assistant_text(self, assistant_msg: AssistantMessage) -> str:
+        parts = []
+        for block in assistant_msg.content:
+            if block.type == "text":
+                parts.append(block.text)
+        return "".join(parts).strip()[:300]
+
     async def run_loop(
         self, 
         context: AgentContext, 
@@ -76,10 +121,20 @@ class ReActLoop:
         异步生成器：驱动真实的 AI 思考、工具调用与结果反馈闭环。
         """
         turn_count = 0
+        final_emitted = False
+        yield PlanEvent(
+            task=self._extract_task_summary(context),
+            tools=sorted(self.tools.keys()),
+            max_turns=max_turns,
+        )
         
         while turn_count < max_turns:
             turn_count += 1
             yield TurnStartEvent()
+            yield StepStartEvent(
+                turn=turn_count,
+                summary="Build context, stream model output, execute requested tools, then verify results.",
+            )
 
             # 1. 对话历史自愈与修补 (Self-Healing)
             # 在喂给 AI 之前，先修补因为中断导致的孤儿工具调用
@@ -151,7 +206,11 @@ class ReActLoop:
                         current_usage = event.usage
 
             except Exception as e:
-                yield MessageDeltaEvent(content=f"\n[Error] 推理异常: {self._format_inference_error(e)}")
+                formatted_error = self._format_inference_error(e)
+                yield ErrorEvent(turn=turn_count, message=formatted_error, recoverable=False)
+                yield MessageDeltaEvent(content=f"\n[Error] 推理异常: {formatted_error}")
+                yield FinalEvent(status="error", turns=turn_count, summary=formatted_error)
+                final_emitted = True
                 break
 
             # 3. 构造本次的助手消息对象
@@ -171,7 +230,15 @@ class ReActLoop:
             
             if not tool_calls:
                 # 活干完了，退出循环
+                final_text = self._collect_assistant_text(assistant_msg)
+                yield VerificationEvent(
+                    turn=turn_count,
+                    passed=True,
+                    summary="No tool call requested; final assistant answer is ready.",
+                )
                 yield TurnEndEvent(message=assistant_msg)
+                yield FinalEvent(status="done", turns=turn_count, summary=final_text or "done")
+                final_emitted = True
                 break
 
             # 5. 统一调度 (Structured Executing)
@@ -193,6 +260,7 @@ class ReActLoop:
             result_iter = iter(raw_results)
 
             # 6. 将结果塞回上下文，并广播事件
+            has_tool_error = False
             for tc, job in tool_jobs:
                 if job is None:
                     res = AgentToolResult(
@@ -208,10 +276,13 @@ class ReActLoop:
                         )
                     else:
                         res = raw_result
+                if res.is_error:
+                    has_tool_error = True
 
                 yield ToolCallEndEvent(
                     tool_call_id=tc.id,
                     result=res.content,
+                    details=res.details,
                     is_error=res.is_error
                 )
                 
@@ -223,4 +294,18 @@ class ReActLoop:
                     is_error=res.is_error
                 ))
 
+            yield VerificationEvent(
+                turn=turn_count,
+                passed=not has_tool_error,
+                summary=(
+                    "All tool calls completed successfully; results were added back to context."
+                    if not has_tool_error
+                    else "One or more tool calls returned errors; results were added back so the model can recover."
+                ),
+            )
             yield TurnEndEvent(message=assistant_msg)
+
+        if not final_emitted:
+            summary = f"Reached max_turns={max_turns} before the task produced a final answer."
+            yield ErrorEvent(turn=turn_count, message=summary, recoverable=True)
+            yield FinalEvent(status="max_turns", turns=turn_count, summary=summary)

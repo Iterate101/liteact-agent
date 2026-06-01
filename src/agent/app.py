@@ -3,7 +3,8 @@ import os
 from typing import AsyncGenerator, Optional, List
 from src.agent.session import SessionManager
 from src.agent.loop import ReActLoop
-from src.agent.events import AgentEvent, TurnEndEvent
+from src.agent.events import AgentEvent, TurnEndEvent, FinalEvent
+from src.agent.trace import TaskTraceRecorder
 from src.models.messages import (
     AgentContext, AgentMessage, UserMessage, 
     AssistantMessage, TextContent
@@ -67,24 +68,35 @@ class AgentSession:
         # 立即落盘持久化，确保万一断电也能找回
         self.manager.append_message(user_msg)
         persisted_message_ids = {msg.uuid for msg in context.messages}
+        trace_recorder = TaskTraceRecorder(
+            trace_dir=os.path.join(os.path.dirname(self.manager.file_path), "traces"),
+            session_id=self.manager.header.id if self.manager.header else "unknown",
+            task=text,
+        )
 
         # C. 驱动循环
         # 我们使用异步迭代器来监听 Loop 产生的每一个事件
-        async for event in self.loop.run_loop(context):
-            
-            # --- 自动持久化钩子 (Persistence Hooks) ---
-            # 如果一轮推理结束了，我们需要把 Loop 新增的助手消息和工具结果都记录下来。
-            if isinstance(event, TurnEndEvent):
-                for message in context.messages:
-                    if message.uuid in persisted_message_ids:
-                        continue
-                    if message.msg_type == "synthetic":
-                        continue
-                    self.manager.append_message(message)
-                    persisted_message_ids.add(message.uuid)
-            
-            # 将事件抛给外层调用者（如 CLI 或 Web UI）
-            yield event
+        try:
+            async for event in self.loop.run_loop(context):
+                trace_recorder.append_event(event)
+                
+                # --- 自动持久化钩子 (Persistence Hooks) ---
+                # 如果一轮推理结束了，我们需要把 Loop 新增的助手消息和工具结果都记录下来。
+                if isinstance(event, TurnEndEvent):
+                    for message in context.messages:
+                        if message.uuid in persisted_message_ids:
+                            continue
+                        if message.msg_type == "synthetic":
+                            continue
+                        self.manager.append_message(message)
+                        persisted_message_ids.add(message.uuid)
+                elif isinstance(event, FinalEvent):
+                    trace_recorder.close(status=event.status, summary=event.summary)
+                
+                # 将事件抛给外层调用者（如 CLI 或 Web UI）
+                yield event
+        finally:
+            trace_recorder.close(status="done")
 
     def load_history(self) -> List[AgentMessage]:
         """获取当前会话的全部历史消息"""

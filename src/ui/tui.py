@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import AsyncGenerator, Optional
 from rich.console import Console, Group
 from rich.live import Live
@@ -33,6 +34,7 @@ class AgentTUI:
         self._current_text = ""
         self._current_thinking = ""
         self._active_tools = {} # 记录正在运行的工具
+        self._tool_results = []
 
     def _make_display(self) -> Panel:
         """根据当前状态构建实时显示布局"""
@@ -61,6 +63,16 @@ class AgentTUI:
         content_group.append(main_content)
         if self._active_tools:
             content_group.append(Panel(tool_status, title="⚡ Tools", border_style="yellow"))
+        if self._tool_results:
+            recent_results = "\n\n".join(self._tool_results[-5:])
+            content_group.append(
+                Panel(
+                    Text(recent_results),
+                    title="🧰 Tool Results",
+                    border_style="cyan",
+                    box=box.ROUNDED,
+                )
+            )
             
         # 【核心修正】：移除 Layout，直接返回 Panel。
         return Panel(
@@ -74,6 +86,7 @@ class AgentTUI:
         self._current_text = ""
         self._current_thinking = ""
         self._active_tools = {}
+        self._tool_results = []
         usage_reports = []
 
         with Live(self._make_display(), console=self.console, refresh_per_second=10) as live:
@@ -90,8 +103,8 @@ class AgentTUI:
                     live.update(self._make_display())
 
                 elif isinstance(event, ToolCallEndEvent):
-                    if event.tool_call_id in self._active_tools:
-                        del self._active_tools[event.tool_call_id]
+                    tool_name = self._active_tools.pop(event.tool_call_id, "tool")
+                    self._tool_results.append(self._format_tool_result(tool_name, event))
                     live.update(self._make_display())
 
                 elif isinstance(event, TurnEndEvent):
@@ -102,9 +115,59 @@ class AgentTUI:
         # 【双重保险】：当 Live 面板关闭后，在普通控制台流中再次打印一次最终全文
         # 这确保了长文本能够融入终端的正常滚动历史中，不会被截断
         self.console.print(Markdown(self._current_text or "..."))
+        if self._tool_results:
+            self.console.print(
+                Panel(
+                    Text("\n\n".join(self._tool_results)),
+                    title="Tool Results",
+                    border_style="cyan",
+                )
+            )
         self.console.print("[dim]------------------------------------------------[/dim]\n")
         if usage_reports:
             self.show_usage_summary(usage_reports)
+
+    def _format_tool_result(self, tool_name: str, event: ToolCallEndEvent) -> str:
+        """Format tool output so manual CLI runs expose checkpoint and rollback args."""
+        status = "ERROR" if event.is_error else "OK"
+        lines = [f"[{status}] {tool_name} ({event.tool_call_id})"]
+
+        result_text = self._result_to_text(event.result)
+        if result_text:
+            lines.append(self._truncate(result_text, limit=1200))
+
+        if isinstance(event.details, dict):
+            checkpoint_id = event.details.get("checkpoint_id")
+            rollback_args = event.details.get("rollback_args")
+            rollback_tool = event.details.get("rollback_tool") or "rollback_file"
+            if checkpoint_id:
+                lines.append(f"checkpoint_id: {checkpoint_id}")
+            if rollback_args:
+                lines.append(
+                    f"rollback: {rollback_tool} {json.dumps(rollback_args, ensure_ascii=False)}"
+                )
+        return "\n".join(lines)
+
+    def _result_to_text(self, result) -> str:
+        if result is None:
+            return ""
+        if isinstance(result, str):
+            return result
+        if isinstance(result, list):
+            parts = []
+            for item in result:
+                text = getattr(item, "text", None)
+                if text:
+                    parts.append(text)
+                else:
+                    parts.append(str(item))
+            return "\n".join(parts)
+        return str(result)
+
+    def _truncate(self, text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "\n... [tool output truncated]"
 
     def _usage_value(self, usage, field: str) -> int:
         """安全读取 usage 字段，避免不同 Provider 缺字段时 UI 崩溃"""

@@ -121,9 +121,57 @@ class UsageEvent(BaseModel):
     type: Literal["usage"] = "usage"
     usage: Usage
 
+class PlanDelta(BaseModel):
+    """任务计划事件，用于 Agent 运行 trace 或平台流式协议。"""
+    type: Literal["plan"] = "plan"
+    task: str
+    tools: List[str] = Field(default_factory=list)
+
+class StepStartDelta(BaseModel):
+    """Agent 单步执行开始事件。"""
+    type: Literal["step_start"] = "step_start"
+    turn: int
+    summary: str = ""
+
+class ToolResultDelta(BaseModel):
+    """工具结果事件。"""
+    type: Literal["tool_result"] = "tool_result"
+    tool_call_id: str
+    tool_name: str
+    is_error: bool = False
+    summary: str = ""
+
+class VerificationDelta(BaseModel):
+    """执行验证事件。"""
+    type: Literal["verification"] = "verification"
+    turn: int
+    passed: bool
+    summary: str = ""
+
+class DoneDelta(BaseModel):
+    """任务结束事件。"""
+    type: Literal["done"] = "done"
+    content: str = ""
+
+class ErrorDelta(BaseModel):
+    """任务错误事件。"""
+    type: Literal["error"] = "error"
+    message: str
+
 # 这是你要求的统一事件生成流所生成的对象
 StreamEvent = Annotated[
-    Union[TextDelta, ThinkingDelta, ToolCallDelta, UsageEvent],
+    Union[
+        TextDelta,
+        ThinkingDelta,
+        ToolCallDelta,
+        UsageEvent,
+        PlanDelta,
+        StepStartDelta,
+        ToolResultDelta,
+        VerificationDelta,
+        DoneDelta,
+        ErrorDelta,
+    ],
     Field(discriminator="type")
 ]
 

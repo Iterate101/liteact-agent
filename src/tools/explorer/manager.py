@@ -1,6 +1,7 @@
 import os
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, List, Set, Dict, Any
 from src.tools.base import AgentTool, AgentToolResult, AgentToolUpdateCallback
 from src.models.messages import TextContent
@@ -33,6 +34,26 @@ class SafeLsTool(AgentTool):
     def __init__(self, base_path: Optional[str] = None):
         self.base_path = base_path
 
+    def _resolve_path(self, path: str) -> str:
+        if not self.base_path:
+            return path
+
+        base = Path(self.base_path).resolve()
+        normalized = (path or "/workspace/").replace("\\", "/")
+        if normalized.startswith("/workspace/"):
+            rel_path = normalized[len("/workspace/"):].lstrip("/")
+            target_path = (base / rel_path).resolve()
+        else:
+            raw_path = Path(path)
+            target_path = raw_path.resolve() if raw_path.is_absolute() else (base / raw_path).resolve()
+
+        try:
+            target_path.relative_to(base)
+        except ValueError:
+            raise ValueError(f"路径越界：{path} 不在工作区 {base} 内。")
+
+        return str(target_path)
+
     async def execute(
         self, 
         tool_call_id: str, 
@@ -45,11 +66,10 @@ class SafeLsTool(AgentTool):
         recursive = params.get("recursive", False)
         
         # 1. 路径沙箱化转译
-        real_path = path
-        if self.base_path and path.startswith("/workspace/"):
-            rel_path = path[len("/workspace/"):].lstrip("/").lstrip("\\")
-            real_path = os.path.join(self.base_path, rel_path)
-            print(f"DEBUG: [安全探测转译] {path} -> {real_path}")
+        try:
+            real_path = self._resolve_path(path)
+        except Exception as e:
+            return AgentToolResult(content=[TextContent(text=f"错误：{str(e)}")], is_error=True)
 
         if not os.path.exists(real_path):
             return AgentToolResult(content=[TextContent(text=f"错误：路径不存在 {path}")], is_error=True)
@@ -123,3 +143,13 @@ class SafeLsTool(AgentTool):
                 return f"{size:.1f}{unit}"
             size /= 1024
         return f"{size:.1f}TB"
+
+
+class ListFilesTool(SafeLsTool):
+    """Default CLI-facing alias for directory listing."""
+
+    name: str = "list_files"
+    description: str = (
+        "List files under a workspace directory with depth control and safe ignores. "
+        "Use this before reading files when you need to understand project structure."
+    )

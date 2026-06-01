@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def test_project_readiness_files_exist():
-    """检查公开仓库所需的项目说明文件是否存在。"""
+    """检查投递准备所需的项目说明文件是否存在。"""
     root = Path(__file__).resolve().parents[1]
 
     required_files = [
@@ -11,10 +11,12 @@ def test_project_readiness_files_exist():
         "requirements.txt",
         ".env.example",
         ".gitignore",
+        "docs/application-pack.md",
+        "docs/demo-guide.md",
     ]
 
     missing = [name for name in required_files if not (root / name).exists()]
-    assert not missing, f"缺少公开仓库说明文件: {missing}"
+    assert not missing, f"缺少投递准备文件: {missing}"
 
 
 def test_env_example_documents_runtime_keys():
